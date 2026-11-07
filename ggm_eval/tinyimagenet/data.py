@@ -224,7 +224,8 @@ class TinyImageNetTest(Dataset):
         d = find_dataset_dir(root)
         if d is None:
             raise FileNotFoundError(f"no tiny-imagenet-200 (wnids.txt + val/) under {root!r}")
-        self.dir, self.transform = d, transform
+        self.root = self.dir = d
+        self.transform = transform
         self.classes, self.samples = _list_samples(d)
         if len(self.samples) != NUM_IMAGES:
             raise RuntimeError(f"expected {NUM_IMAGES:,} test images under {d}/val, found {len(self.samples):,}")

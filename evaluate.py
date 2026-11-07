@@ -1,0 +1,209 @@
+#!/usr/bin/env python
+"""Evaluate GGM ResNet checkpoints on the TinyImageNet-200 or ImageNet-1k test set."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+
+import torch
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DATASETS = ("tinyimagenet", "imagenet")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--dataset", choices=DATASETS, help="which test set and model family")
+    p.add_argument("--model", help="model name (see --list), or 'all'")
+    p.add_argument("--list", action="store_true", help="list the models and which checkpoints are present")
+    p.add_argument("--checkpoint_dir", default=None, help="default: checkpoints/<dataset>")
+    p.add_argument("--data_root", default=None, help="default: data/<dataset>")
+    p.add_argument("--no_download", action="store_true", help="tinyimagenet: fail instead of downloading the test set")
+    p.add_argument("--device", default=None, help="cuda or cpu (default: cuda if available)")
+    p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--num_workers", type=int, default=min(8, os.cpu_count() or 1))
+    p.add_argument("--limit_batches", type=int, default=0, help="smoke test: stop after this many batches")
+    p.add_argument("--json_out", default="", help="also write the results to this JSON file")
+    return p.parse_args()
+
+
+def registry(dataset: str):
+    if dataset == "tinyimagenet":
+        from ggm_eval.tinyimagenet import models
+    else:
+        from ggm_eval.imagenet import models
+    return models
+
+
+def checkpoint_path(ckpt_dir: str, name: str) -> str:
+    return os.path.join(ckpt_dir, name + ".pt")
+
+
+def list_models(dataset: str, ckpt_dir: str):
+    MODELS = registry(dataset).MODELS
+    print(f"{dataset}  (checkpoints: {ckpt_dir})")
+    print(f"  {'model':<26} {'arch':<9} {'bits':<10} {'N':>2}  checkpoint")
+    for name, m in MODELS.items():
+        have = "present" if os.path.isfile(checkpoint_path(ckpt_dir, name)) else "missing"
+        print(f"  {name:<26} {m['arch']:<9} {m['bits']:<10} {m['N']:>2}  {have}")
+
+
+def load_test_set(dataset: str, root: str, download: bool):
+    if dataset == "tinyimagenet":
+        from ggm_eval.tinyimagenet.data import TinyImageNetTest, ensure_test_set
+        return TinyImageNetTest(ensure_test_set(root, download=download))
+    from ggm_eval.imagenet.data import build_test_set
+    return build_test_set(root)
+
+
+def load_model(dataset: str, path: str, name: str):
+    """Returns (model, note) where note describes the rebuilt projection matrices, if known."""
+    if dataset == "tinyimagenet":
+        from ggm_eval.tinyimagenet.checkpoint import build_model, load_checkpoint
+        model, info = build_model(load_checkpoint(path))
+        return model, f"G: {info['g_exact']}/{info['g_layers']} layers match the stored checksums"
+    from ggm_eval.imagenet.checkpoint import load_model as load_imagenet
+    return load_imagenet(path, name), None
+
+
+@torch.inference_mode()
+def evaluate(model, loader, device, amp_dtype, channels_last, limit_batches=0):
+    n = correct1 = correct5 = 0
+    loss_sum = 0.0
+    for i, (imgs, labels) in enumerate(loader):
+        if limit_batches and i >= limit_batches:
+            break
+        imgs = imgs.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+        if channels_last:
+            imgs = imgs.contiguous(memory_format=torch.channels_last)
+        with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
+            logits = model(imgs)
+            loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
+        correct1 += (logits.argmax(1) == labels).sum().item()
+        correct5 += (logits.float().topk(5, dim=1).indices == labels[:, None]).any(dim=1).sum().item()
+        loss_sum += loss.item() * imgs.size(0)
+        n += imgs.size(0)
+        print(f"\r  evaluating: {n:,}/{len(loader.dataset):,} images", end="", flush=True)
+    print()
+    return {"top1": 100 * correct1 / n, "top5": 100 * correct5 / n, "loss": loss_sum / n, "images": n}
+
+
+def main():
+    args = parse_args()
+    if args.list and not args.dataset:
+        for d in DATASETS:
+            list_models(d, os.path.join(HERE, "checkpoints", d))
+            print()
+        return 0
+    if not args.dataset:
+        print(f"error: give --dataset {{{','.join(DATASETS)}}}", file=sys.stderr)
+        return 2
+    ckpt_dir = args.checkpoint_dir or os.path.join(HERE, "checkpoints", args.dataset)
+    data_root = args.data_root or os.path.join(HERE, "data", args.dataset)
+    if args.list:
+        list_models(args.dataset, ckpt_dir)
+        return 0
+    if not args.model:
+        print("error: give --model <name> or --model all (see --list)", file=sys.stderr)
+        return 2
+    try:
+        reg = registry(args.dataset)
+    except ImportError as e:
+        print(f"error: {e}. Install the requirements: pip install -r requirements.txt", file=sys.stderr)
+        return 1
+    if args.model.lower() == "all":
+        names = [m for m in reg.MODELS if os.path.isfile(checkpoint_path(ckpt_dir, m))]
+        if not names:
+            print(f"error: no checkpoints found in {ckpt_dir}", file=sys.stderr)
+            return 1
+    else:
+        try:
+            names = [reg.resolve(args.model)]
+        except KeyError:
+            print(f"error: unknown {args.dataset} model {args.model!r}. Available models:\n", file=sys.stderr)
+            list_models(args.dataset, ckpt_dir)
+            return 2
+        if not os.path.isfile(checkpoint_path(ckpt_dir, names[0])):
+            print(f"error: checkpoint not found: {checkpoint_path(ckpt_dir, names[0])}", file=sys.stderr)
+            return 1
+
+    if args.device is None:
+        args.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if args.device == "cpu":
+            print("note: PyTorch does not see a GPU, so the CPU is used "
+                  "(for a GPU, see Setup in README.md; to silence this note, pass --device cpu)")
+    device = torch.device(args.device)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        print("error: --device cuda requested but no CUDA GPU is available", file=sys.stderr)
+        return 1
+    # per-dataset settings: tinyimagenet bf16 + TF32, imagenet fp32
+    amp_dtype = torch.bfloat16 if (args.dataset == "tinyimagenet" and device.type == "cuda") else None
+    channels_last_inputs = device.type == "cuda" or args.dataset == "imagenet"
+    if device.type == "cuda":
+        if args.dataset == "tinyimagenet":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+
+    try:
+        dataset = load_test_set(args.dataset, data_root, download=not args.no_download)
+    except FileNotFoundError as e:
+        hint = ". Remove --no_download to download it, or pass --data_root <dir>." if args.dataset == "tinyimagenet" else ""
+        print(f"error: {e}{hint}", file=sys.stderr)
+        return 1
+    except (urllib.error.URLError, OSError, RuntimeError) as e:
+        print(f"error: could not prepare the {args.dataset} test set: {e}", file=sys.stderr)
+        return 1
+    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
+                        num_workers=args.num_workers, pin_memory=device.type == "cuda")
+    gpu = f" ({torch.cuda.get_device_name(device)})" if device.type == "cuda" else ""
+    print(f"{args.dataset} test set: {len(dataset):,} images in {dataset.root}\n"
+          f"device: {device}{gpu} | batch: {args.batch_size} | torch {torch.__version__}")
+
+    results = []
+    for name in names:
+        print(f"\n== {args.dataset} / {name}")
+        t0 = time.time()
+        try:
+            model, note = load_model(args.dataset, checkpoint_path(ckpt_dir, name), name)
+        except Exception as e:  # truncated download, wrong file, ...
+            print(f"error: could not load {checkpoint_path(ckpt_dir, name)}: {e}", file=sys.stderr)
+            return 1
+        if note:
+            print(f"  {note}")
+        model.to(device)
+        if device.type == "cuda":  # 4-D tensors only: 5-D projection buffers stay as they are
+            for t in list(model.parameters()) + list(model.buffers()):
+                if t.dim() == 4:
+                    t.data = t.data.contiguous(memory_format=torch.channels_last)
+        r = evaluate(model, loader, device, amp_dtype, channels_last_inputs, args.limit_batches)
+        part = f"(partial run on {r['images']:,} of {len(dataset):,} images)   " if r["images"] < len(dataset) else ""
+        print(f"  top-1 {r['top1']:.2f} %   top-5 {r['top5']:.2f} %   loss {r['loss']:.4f}   {part}"
+              f"{time.time() - t0:.0f} s")
+        results.append({"dataset": args.dataset, "model": name, **r, "device": str(device),
+                        "batch_size": args.batch_size,
+                        "torch": torch.__version__})
+        del model
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+    if len(results) > 1:
+        print(f"\n{'model':<26} {'top-1':>7} {'top-5':>7}  images")
+        for r in results:
+            print(f"{r['model']:<26} {r['top1']:>6.2f}% {r['top5']:>6.2f}%  {r['images']:,}")
+    if args.json_out:
+        with open(args.json_out, "w") as f:
+            json.dump(results, f, indent=2)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

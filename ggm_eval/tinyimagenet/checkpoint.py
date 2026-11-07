@@ -6,7 +6,7 @@ import time
 import torch
 
 from .ggm_conv import GGMConv2d
-from .projections import G_THREADS, cpu_threads, make_G_conv2d, sha256_of
+from ..projections import G_THREADS, cpu_threads, make_G_conv2d, sha256_of
 from .resnet import GGMResNet
 
 FORMAT = "ggm-seed-checkpoint-v1"
