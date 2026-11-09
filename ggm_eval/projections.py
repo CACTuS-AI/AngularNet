@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import math
 
 import torch
@@ -31,10 +30,6 @@ def make_G_conv2d(seed: int, groups: int, N: int, cin_g: int, kh: int, kw: int) 
     d = int(cin_g) * int(kh) * int(kw)
     return torch.stack([make_G(int(seed) + 10007 * i, N, d).reshape(N, cin_g, kh, kw)
                         for i in range(int(groups))], dim=0)
-
-
-def sha256_of(t: torch.Tensor) -> str:
-    return hashlib.sha256(t.cpu().contiguous().numpy().tobytes()).hexdigest()
 
 
 @contextlib.contextmanager

@@ -1,1 +1,1 @@
-"""Inference-only evaluation of GGM ResNets on TinyImageNet-200 and ImageNet-1k."""
+"""Inference-only evaluation of GGM models on TinyImageNet-200, ImageNet-1k and CIFAR-10."""
