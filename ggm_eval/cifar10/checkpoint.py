@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 
 from .models import MODELS
-from .vgg import build_model
+from . import resnet, vgg
 
 
 def load_model(path: str, name: str):
@@ -14,6 +14,7 @@ def load_model(path: str, name: str):
         raise ValueError(f"{path} does not contain a model state dict")
     state = {k.replace("_orig_mod.", "").removeprefix("module."): v for k, v in state.items()}
     m = MODELS[name]
-    model = build_model(m["arch"], N_factor=m["N"])
+    build = resnet.build_model if m["arch"].startswith("resnet") else vgg.build_model
+    model = build(m["arch"], N_factor=m["N"])
     model.load_state_dict(state, strict=True)  # rebuilds every G from its seed
     return model.eval()

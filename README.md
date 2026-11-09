@@ -4,8 +4,8 @@ Research artifacts for the AngularNet NeurIPS paper. Release contents are being
 prepared from the ggd-vision research project.
 
 This branch contains the evaluation code for the trained GGM ResNet-18 / ResNet-34 models on the
-TinyImageNet-200 and ImageNet-1k test sets, and for the GGM VGG-16 model on the CIFAR-10 test set.
-All commands below are run from the repository root.
+TinyImageNet-200 and ImageNet-1k test sets, and for the GGM ResNet-18 and VGG-16 models on the
+CIFAR-10 test set. All commands below are run from the repository root.
 
 ## Setup
 
@@ -103,6 +103,7 @@ python evaluate.py --help                                                      #
 | tinyimagenet | `resnet34_ggm_1bit_N2` | ResNet-34 | 1 / 1 | 2 |
 | imagenet | `resnet18_ggm_1bit_N1` | ResNet-18 | 1 / 1 | 1 |
 | imagenet | `resnet34_ggm_1bit_N1` | ResNet-34 | 1 / 1 | 1 |
+| cifar10 | `resnet18_ggm_1bit_N1` | ResNet-18 | 1 / 1 | 1 |
 | cifar10 | `vgg16_ggm_1bit_N1` | VGG-16 | 1 / 1 | 1 |
 
 1.58-bit means ternary {-1, 0, +1} quantization. N is the projection factor: each GGM layer uses
@@ -160,7 +161,7 @@ ggm_eval/
   projections.py          G from seeds
   tinyimagenet/           GGM convolution, ResNet, checkpoint loading, test set download
   imagenet/               GGM convolution, ResNet (timm), checkpoint loading, test set loading
-  cifar10/                VGG-16, checkpoint loading, test set download
+  cifar10/                ResNet-18, VGG-16, checkpoint loading, test set download
 ```
 
 ## License

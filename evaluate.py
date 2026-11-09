@@ -4,7 +4,7 @@
 usage:
   python evaluate.py tinyimagenet resnet18_ggm_1bit_N1   one model
   python evaluate.py imagenet all                        every checkpoint of a dataset
-  python evaluate.py cifar10 vgg16_ggm_1bit_N1
+  python evaluate.py cifar10 resnet18_ggm_1bit_N1
   python evaluate.py list                                all available models
 """
 from __future__ import annotations
