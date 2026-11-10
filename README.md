@@ -3,15 +3,26 @@
 Research artifacts for the AngularNet NeurIPS paper. Release contents are being
 prepared from the ggd-vision research project.
 
-This branch contains the evaluation code for the trained GGM ResNet-18 / ResNet-34 models on the
-TinyImageNet-200 and ImageNet-1k test sets, and for the GGM ResNet-18 and VGG-16 models on the
-CIFAR-10 test set. All commands below are run from the repository root.
+This repository contains the evaluation code and checkpoints for the trained GGM models:
+
+- ResNet-18 / ResNet-34 on the TinyImageNet-200 and ImageNet-1k test sets
+- ResNet-18 and VGG-16 on the CIFAR-10 test set
+- Medformer on the ADFTD (EEG) and PTB-XL (ECG) test sets
+
+All commands below are run from the repository root.
 
 ## Setup
 
 Windows or Linux (including WSL2), Python 3.11 or newer.
 
-1. Create an environment, with conda:
+1. Get the code:
+
+   ```bash
+   git clone https://github.com/CACTuS-AI/AngularNet.git
+   cd AngularNet
+   ```
+
+2. Create an environment, with conda:
 
    ```bash
    conda create -n AngularNet python=3.11 -y
@@ -29,14 +40,14 @@ Windows or Linux (including WSL2), Python 3.11 or newer.
    .venv\Scripts\activate
    ```
 
-2. Install the packages, including PyTorch. This one command installs a PyTorch build that uses an
+3. Install the packages, including PyTorch. This one command installs a PyTorch build that uses an
    NVIDIA GPU when one is available and the CPU otherwise:
 
    ```bash
    pip install -r requirements.txt
    ```
 
-3. Check the installation (on a GPU machine this should print `GPU: True`):
+4. Check the installation (on a GPU machine this should print `GPU: True`):
 
    ```bash
    python -c "import torch; print(torch.__version__, 'GPU:', torch.cuda.is_available())"
@@ -44,7 +55,7 @@ Windows or Linux (including WSL2), Python 3.11 or newer.
 
    If it prints `GPU: False` on a machine with an NVIDIA GPU, the NVIDIA driver is older than the
    installed PyTorch build needs. Update the driver, or install `torch` and `torchvision` with the
-   command for your driver from https://pytorch.org/get-started/locally/ and run step 2 again.
+   command for your driver from https://pytorch.org/get-started/locally/ and run step 3 again.
    Without a GPU, evaluation runs on the CPU, only more slowly.
 
 ## Quick start
@@ -53,6 +64,8 @@ Windows or Linux (including WSL2), Python 3.11 or newer.
 python evaluate.py tinyimagenet resnet18_ggm_1bit_N1
 python evaluate.py imagenet resnet34_ggm_1bit_N1
 python evaluate.py cifar10 vgg16_ggm_1bit_N1
+python evaluate.py adftd medformer_ggm_1bit
+python evaluate.py ptbxl medformer_ggm_1bit
 python evaluate.py tinyimagenet all              # every checkpoint of one dataset
 python evaluate.py list                          # all models
 ```
@@ -66,15 +79,15 @@ Checkpoints are read from `checkpoints/<dataset>/<model>.pt` and test sets from
 ## Options
 
 ```
-python evaluate.py <tinyimagenet|imagenet|cifar10> <model|all|list> [options]
+python evaluate.py <tinyimagenet|imagenet|cifar10|adftd|ptbxl> <model|all|list> [options]
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--device cuda` / `--device cpu` | `cuda` if a GPU is available, else `cpu` | where to run |
-| `--batch_size N` | 64 | images per batch; lower it if the GPU runs out of memory |
+| `--batch_size N` | 64 (images), 128 (ADFTD, PTB-XL) | images or samples per batch; lower it if the GPU runs out of memory |
 | `--limit_batches N` | 0 (all) | stop after N batches, as a quick check that everything runs; the result is not comparable to a full run |
-| `--num_workers N` | min(8, number of CPUs) | processes that load images |
+| `--num_workers N` | min(8, number of CPUs) | processes that load images (image datasets only) |
 | `--data_root DIR` | `data/<dataset>` | where the test set is (TinyImageNet and CIFAR-10 are downloaded there) |
 | `--checkpoint_dir DIR` | `checkpoints/<dataset>` | where the `.pt` files are |
 | `--no_download` | off | TinyImageNet, CIFAR-10: stop with an error instead of downloading the test set |
@@ -84,9 +97,10 @@ Examples:
 
 ```bash
 python evaluate.py tinyimagenet resnet18_ggm_1bit_N1 --limit_batches 2      # quick check, 2 batches
-python evaluate.py tinyimagenet resnet18_ggm_1bit_N1 --device cpu             # run on the CPU
+python evaluate.py cifar10 resnet18_ggm_1bit_N1 --device cpu                  # run on the CPU
 python evaluate.py imagenet all --batch_size 32 --json_out results.json
 python evaluate.py imagenet resnet34_ggm_1bit_N1 --data_root /datasets/imagenet
+python evaluate.py adftd medformer_ggm_1bit --data_root /datasets/ADFTD
 python evaluate.py --help                                                      # full option list
 ```
 
@@ -105,9 +119,12 @@ python evaluate.py --help                                                      #
 | imagenet | `resnet34_ggm_1bit_N1` | ResNet-34 | 1 / 1 | 1 |
 | cifar10 | `resnet18_ggm_1bit_N1` | ResNet-18 | 1 / 1 | 1 |
 | cifar10 | `vgg16_ggm_1bit_N1` | VGG-16 | 1 / 1 | 1 |
+| adftd | `medformer_ggm_1bit` | Medformer | 1 / 1 | 1 |
+| ptbxl | `medformer_ggm_1bit` | Medformer | 1 / 1 | 1 |
 
 1.58-bit means ternary {-1, 0, +1} quantization. N is the projection factor: each GGM layer uses
-N x (input channels x kernel height x kernel width) random projection directions.
+N x (layer input size) random projection directions; for a convolution the input size is
+input channels x kernel size.
 
 ## Test sets
 
@@ -148,7 +165,24 @@ torchvision from `https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz` (163 
 `data/cifar10/`. An existing copy can be used with `--data_root <dir>` (the directory containing
 `cifar-10-batches-py/`).
 
+**ADFTD and PTB-XL.** These have to be downloaded by hand:
 
+1. Download the processed datasets:
+
+   | Dataset | Link |
+   |---|---|
+   | ADFTD | https://drive.google.com/file/d/1QcX_M58IQUBn3lDBlVVL0SDN7_QI1vWe/view |
+   | PTB-XL | https://drive.google.com/file/d/1whskRvTZUNb1Qph2SeXEdpcU2rQY0T1E/view |
+
+2. Extract them so that each dataset directory contains `Feature/` and `Label/`:
+
+   ```
+   data/adftd/Feature/   data/adftd/Label/label.npy
+   data/ptbxl/Feature/   data/ptbxl/Label/label.npy
+   ```
+
+   An existing copy elsewhere can be used with `--data_root <dir>` (the directory that contains
+   `Feature/` and `Label/`).
 
 ## Files
 
@@ -158,10 +192,15 @@ run_eval.sh               the same, for bash: bash run_eval.sh <arguments>
 requirements.txt
 checkpoints/<dataset>/    <model>.pt
 ggm_eval/
-  projections.py          G from seeds
-  tinyimagenet/           GGM convolution, ResNet, checkpoint loading, test set download
-  imagenet/               GGM convolution, ResNet (timm), checkpoint loading, test set loading
-  cifar10/                ResNet-18, VGG-16, checkpoint loading, test set download
+  projections.py          projection matrices G, rebuilt from their seeds
+  layers.py               GGM layers: 2-D convolutions, 1-D convolution, linear
+  resnet.py               ResNets for TinyImageNet, ImageNet (timm) and CIFAR-10
+  vgg.py                  VGG-16 for CIFAR-10
+  medformer.py            Medformer for ADFTD and PTB-XL
+  models.py               list of released models
+  checkpoint.py           checkpoint loading
+  data.py                 test sets (download and loading)
+  metrics.py              ADFTD / PTB-XL metrics
 ```
 
 ## License

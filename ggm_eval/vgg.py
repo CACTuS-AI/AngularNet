@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from ..imagenet.ggm_conv import Conv2dGGM
+from .layers import Conv2dGGM
 
 CFG = {"vgg16": [64, 64, "M", 128, 128, "M", 256, 256, 256, "M", 512, 512, 512, "M", 512, 512, 512]}
 
@@ -29,5 +29,5 @@ class VGG(nn.Module):
         return self.fc(torch.flatten(self.features(x), 1))
 
 
-def build_model(arch: str, N_factor: float = 1.0, num_classes: int = 10) -> nn.Module:
+def build_vgg(arch: str, N_factor: float = 1.0, num_classes: int = 10) -> nn.Module:
     return VGG(arch, N_factor=N_factor, num_classes=num_classes)

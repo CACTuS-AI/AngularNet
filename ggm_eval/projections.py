@@ -32,6 +32,13 @@ def make_G_conv2d(seed: int, groups: int, N: int, cin_g: int, kh: int, kw: int) 
                         for i in range(int(groups))], dim=0)
 
 
+def make_G_conv1d(seed: int, groups: int, N: int, cin_g: int, k: int) -> torch.Tensor:
+    """[groups, N, cin_g, k]; group i uses seed + 10007 * i."""
+    d = int(cin_g) * int(k)
+    return torch.stack([make_G(int(seed) + 10007 * i, N, d).reshape(N, cin_g, k)
+                        for i in range(int(groups))], dim=0)
+
+
 @contextlib.contextmanager
 def cpu_threads(n: int):
     old = torch.get_num_threads()

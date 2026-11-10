@@ -1,10 +1,11 @@
 #!/usr/bin/env python
-"""Evaluate GGM checkpoints on the TinyImageNet-200, ImageNet-1k or CIFAR-10 test set.
+"""Evaluate GGM checkpoints on the TinyImageNet-200, ImageNet-1k, CIFAR-10, ADFTD or PTB-XL test set.
 
 usage:
   python evaluate.py tinyimagenet resnet18_ggm_1bit_N1   one model
   python evaluate.py imagenet all                        every checkpoint of a dataset
   python evaluate.py cifar10 resnet18_ggm_1bit_N1
+  python evaluate.py adftd medformer_ggm_1bit
   python evaluate.py list                                all available models
 """
 from __future__ import annotations
@@ -17,7 +18,7 @@ import sys
 import time
 import urllib.error
 
-_missing = [m for m in ("torch", "torchvision", "PIL", "numpy") if importlib.util.find_spec(m) is None]
+_missing = [m for m in ("torch", "torchvision", "PIL", "numpy", "sklearn") if importlib.util.find_spec(m) is None]
 if _missing:
     sys.exit(f"error: missing Python packages ({', '.join(_missing)}). Install them with:\n"
              f"  pip install -r requirements.txt\n(see Setup in README.md)")
@@ -27,7 +28,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATASETS = ("tinyimagenet", "imagenet", "cifar10")
+IMAGE_DATASETS = ("tinyimagenet", "imagenet", "cifar10")
+TIMESERIES_DATASETS = ("adftd", "ptbxl")
+DATASETS = IMAGE_DATASETS + TIMESERIES_DATASETS
 
 
 def parse_args():
@@ -41,8 +44,8 @@ def parse_args():
     p.add_argument("--data_root", default=None, help="default: data/<dataset>")
     p.add_argument("--no_download", action="store_true", help="tinyimagenet, cifar10: fail instead of downloading the test set")
     p.add_argument("--device", default=None, help="cuda or cpu (default: cuda if available)")
-    p.add_argument("--batch_size", type=int, default=64)
-    p.add_argument("--num_workers", type=int, default=min(8, os.cpu_count() or 1))
+    p.add_argument("--batch_size", type=int, default=None, help="default: 64 for images, 128 for time series")
+    p.add_argument("--num_workers", type=int, default=min(8, os.cpu_count() or 1), help="image datasets only")
     p.add_argument("--limit_batches", type=int, default=0, help="smoke test: stop after this many batches")
     p.add_argument("--json_out", default="", help="also write the results to this JSON file")
     args = p.parse_args()
@@ -65,17 +68,9 @@ def parse_args():
     elif not (args.dataset or args.list):
         p.print_usage()
         args.list = True
+    if args.batch_size is None:
+        args.batch_size = 128 if args.dataset in TIMESERIES_DATASETS else 64
     return args
-
-
-def registry(dataset: str):
-    if dataset == "tinyimagenet":
-        from ggm_eval.tinyimagenet import models
-    elif dataset == "cifar10":
-        from ggm_eval.cifar10 import models
-    else:
-        from ggm_eval.imagenet import models
-    return models
 
 
 def checkpoint_path(ckpt_dir: str, name: str) -> str:
@@ -83,39 +78,16 @@ def checkpoint_path(ckpt_dir: str, name: str) -> str:
 
 
 def list_models(dataset: str, ckpt_dir: str):
-    MODELS = registry(dataset).MODELS
+    from ggm_eval.models import MODELS
     print(f"{dataset}  (checkpoints: {ckpt_dir})")
     print(f"  {'model':<26} {'arch':<9} {'bits':<10} {'N':>2}  checkpoint")
-    for name, m in MODELS.items():
+    for name, m in MODELS[dataset].items():
         have = "present" if os.path.isfile(checkpoint_path(ckpt_dir, name)) else "missing"
         print(f"  {name:<26} {m['arch']:<9} {m['bits']:<10} {m['N']:>2}  {have}")
 
 
-def load_test_set(dataset: str, root: str, download: bool):
-    if dataset == "tinyimagenet":
-        from ggm_eval.tinyimagenet.data import TinyImageNetTest, ensure_test_set
-        return TinyImageNetTest(ensure_test_set(root, download=download))
-    if dataset == "cifar10":
-        from ggm_eval.cifar10.data import build_test_set as build_cifar10
-        return build_cifar10(root, download=download)
-    from ggm_eval.imagenet.data import build_test_set
-    return build_test_set(root)
-
-
-def load_model(dataset: str, path: str, name: str):
-    """Build the model and load its weights; every G is rebuilt from its seed."""
-    if dataset == "tinyimagenet":
-        from ggm_eval.tinyimagenet.checkpoint import build_model, load_checkpoint
-        return build_model(load_checkpoint(path))
-    if dataset == "cifar10":
-        from ggm_eval.cifar10.checkpoint import load_model as load_cifar10
-        return load_cifar10(path, name)
-    from ggm_eval.imagenet.checkpoint import load_model as load_imagenet
-    return load_imagenet(path, name)
-
-
 @torch.inference_mode()
-def evaluate(model, loader, device, amp_dtype, channels_last, limit_batches=0):
+def evaluate_images(model, loader, device, amp_dtype, channels_last, limit_batches=0):
     n = correct1 = correct5 = 0
     loss_sum = 0.0
     for i, (imgs, labels) in enumerate(loader):
@@ -147,6 +119,7 @@ def main():
     if not args.dataset:
         print(f"error: give a dataset ({', '.join(DATASETS)})", file=sys.stderr)
         return 2
+    timeseries = args.dataset in TIMESERIES_DATASETS
     ckpt_dir = args.checkpoint_dir or os.path.join(HERE, "checkpoints", args.dataset)
     data_root = args.data_root or os.path.join(HERE, "data", args.dataset)
     if args.list:
@@ -155,19 +128,15 @@ def main():
     if not args.model:
         print("error: give a model name or 'all' (see: python evaluate.py list)", file=sys.stderr)
         return 2
-    try:
-        reg = registry(args.dataset)
-    except ImportError as e:
-        print(f"error: {e}. Install the requirements: pip install -r requirements.txt", file=sys.stderr)
-        return 1
+    from ggm_eval.models import MODELS, resolve
     if args.model.lower() == "all":
-        names = [m for m in reg.MODELS if os.path.isfile(checkpoint_path(ckpt_dir, m))]
+        names = [m for m in MODELS[args.dataset] if os.path.isfile(checkpoint_path(ckpt_dir, m))]
         if not names:
             print(f"error: no checkpoints found in {ckpt_dir}", file=sys.stderr)
             return 1
     else:
         try:
-            names = [reg.resolve(args.model)]
+            names = [resolve(args.dataset, args.model)]
         except KeyError:
             print(f"error: unknown {args.dataset} model {args.model!r}. Available models:\n", file=sys.stderr)
             list_models(args.dataset, ckpt_dir)
@@ -185,9 +154,9 @@ def main():
     if device.type == "cuda" and not torch.cuda.is_available():
         print("error: --device cuda requested but no CUDA GPU is available", file=sys.stderr)
         return 1
-    # per-dataset settings: tinyimagenet bf16 + TF32, cifar10 fp32 + TF32, imagenet fp32
+    # per-dataset settings: tinyimagenet bf16 + TF32, cifar10 fp32 + TF32, imagenet and time series fp32
     amp_dtype = torch.bfloat16 if (args.dataset == "tinyimagenet" and device.type == "cuda") else None
-    channels_last_inputs = device.type == "cuda" or args.dataset == "imagenet"
+    channels_last = not timeseries and (device.type == "cuda" or args.dataset == "imagenet")
     if device.type == "cuda":
         if args.dataset in ("tinyimagenet", "cifar10"):
             torch.backends.cuda.matmul.allow_tf32 = True
@@ -195,20 +164,31 @@ def main():
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
 
+    from ggm_eval.checkpoint import load_model
+    from ggm_eval.data import load_test_set
     try:
         dataset = load_test_set(args.dataset, data_root, download=not args.no_download)
     except FileNotFoundError as e:
-        hint = (". Remove --no_download to download it, or pass --data_root <dir>."
-                if args.dataset in ("tinyimagenet", "cifar10") else "")
+        if timeseries:
+            hint = ". See 'Test sets' in README.md, or pass --data_root <dir>."
+        elif args.dataset in ("tinyimagenet", "cifar10"):
+            hint = ". Remove --no_download to download it, or pass --data_root <dir>."
+        else:
+            hint = ""
         print(f"error: {e}{hint}", file=sys.stderr)
         return 1
-    except (urllib.error.URLError, OSError, RuntimeError) as e:
+    except (urllib.error.URLError, OSError, RuntimeError, ValueError) as e:
         print(f"error: could not prepare the {args.dataset} test set: {e}", file=sys.stderr)
         return 1
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
-                        num_workers=args.num_workers, pin_memory=device.type == "cuda")
+    if timeseries:  # the test set is already in memory
+        loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+        what = f"{len(dataset):,} samples from {dataset.subjects} subjects"
+    else:
+        loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
+                            num_workers=args.num_workers, pin_memory=device.type == "cuda")
+        what = f"{len(dataset):,} images"
     gpu = f" ({torch.cuda.get_device_name(device)})" if device.type == "cuda" else ""
-    print(f"{args.dataset} test set: {len(dataset):,} images in {dataset.root}\n"
+    print(f"{args.dataset} test set: {what} in {dataset.root}\n"
           f"device: {device}{gpu} | batch: {args.batch_size} | torch {torch.__version__}")
 
     results = []
@@ -222,22 +202,31 @@ def main():
             return 1
         print("  G rebuilt from seeds")
         model.to(device)
-        if device.type == "cuda":  # 4-D tensors only: 5-D projection buffers stay as they are
-            for t in list(model.parameters()) + list(model.buffers()):
-                if t.dim() == 4:
-                    t.data = t.data.contiguous(memory_format=torch.channels_last)
-        r = evaluate(model, loader, device, amp_dtype, channels_last_inputs, args.limit_batches)
-        part = f"(partial run on {r['images']:,} of {len(dataset):,} images)   " if r["images"] < len(dataset) else ""
-        print(f"  top-1 {r['top1']:.2f} %   top-5 {r['top5']:.2f} %   loss {r['loss']:.4f}   {part}"
-              f"{time.time() - t0:.0f} s")
+        if timeseries:
+            from ggm_eval.metrics import evaluate as evaluate_timeseries
+            r = evaluate_timeseries(model, loader, device, len(dataset.classes), args.limit_batches)
+            n = r["samples"]
+            line = "   ".join(f"{k} {r[k]:.2f} %" for k in ("accuracy", "precision", "recall", "f1", "auroc", "auprc")
+                             if k in r)
+            unit = "samples"
+        else:
+            if device.type == "cuda":  # 4-D tensors only: 5-D projection buffers stay as they are
+                for t in list(model.parameters()) + list(model.buffers()):
+                    if t.dim() == 4:
+                        t.data = t.data.contiguous(memory_format=torch.channels_last)
+            r = evaluate_images(model, loader, device, amp_dtype, channels_last, args.limit_batches)
+            n = r["images"]
+            line = f"top-1 {r['top1']:.2f} %   top-5 {r['top5']:.2f} %"
+            unit = "images"
+        part = f"(partial run on {n:,} of {len(dataset):,} {unit})   " if n < len(dataset) else ""
+        print(f"  {line}   loss {r['loss']:.4f}   {part}{time.time() - t0:.0f} s")
         results.append({"dataset": args.dataset, "model": name, **r, "device": str(device),
-                        "batch_size": args.batch_size,
-                        "torch": torch.__version__})
+                        "batch_size": args.batch_size, "torch": torch.__version__})
         del model
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-    if len(results) > 1:
+    if len(results) > 1 and not timeseries:
         print(f"\n{'model':<26} {'top-1':>7} {'top-5':>7}  images")
         for r in results:
             print(f"{r['model']:<26} {r['top1']:>6.2f}% {r['top5']:>6.2f}%  {r['images']:,}")
