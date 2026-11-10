@@ -1,4 +1,4 @@
-"""GGM layers, forward pass only."""
+"""GGM layers."""
 from __future__ import annotations
 
 import torch

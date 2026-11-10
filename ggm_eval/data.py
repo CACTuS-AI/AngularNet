@@ -1,5 +1,4 @@
-"""Test sets: TinyImageNet-200 (labelled val/ split, downloaded), ImageNet-1k (validation set, placed by
-hand), CIFAR-10 (downloaded), ADFTD and PTB-XL (Medformer's processed format, placed by hand)."""
+"""Test sets."""
 from __future__ import annotations
 
 import hashlib

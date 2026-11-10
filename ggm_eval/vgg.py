@@ -1,4 +1,4 @@
-"""VGG-16 for CIFAR-10 with PReLU activations and GGM convolutions (first convolution, BatchNorm and classifier full precision)."""
+"""VGG-16 with GGM convolutions."""
 from __future__ import annotations
 
 import torch

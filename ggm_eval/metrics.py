@@ -1,4 +1,4 @@
-"""Evaluation loop and metrics for the time-series models."""
+"""Time-series evaluation and metrics."""
 from __future__ import annotations
 
 import numpy as np

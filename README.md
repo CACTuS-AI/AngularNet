@@ -60,14 +60,49 @@ Windows or Linux (including WSL2), Python 3.11 or newer.
 
 ## Quick start
 
+One command per dataset and model (1-bit, N = 1). The command format is
+`python evaluate.py <dataset> <model>`.
+
+**TinyImageNet-200** (the test set is downloaded automatically on first use):
+
 ```bash
 python evaluate.py tinyimagenet resnet18_ggm_1bit_N1
+python evaluate.py tinyimagenet resnet34_ggm_1bit_N1
+```
+
+**ImageNet-1k** (the validation set has to be downloaded by hand first, see
+[Test sets](#test-sets)):
+
+```bash
+python evaluate.py imagenet resnet18_ggm_1bit_N1
 python evaluate.py imagenet resnet34_ggm_1bit_N1
+```
+
+**CIFAR-10** (the test set is downloaded automatically on first use):
+
+```bash
+python evaluate.py cifar10 resnet18_ggm_1bit_N1
 python evaluate.py cifar10 vgg16_ggm_1bit_N1
+```
+
+**ADFTD** (the test set has to be downloaded by hand first, see [Test sets](#test-sets)):
+
+```bash
 python evaluate.py adftd medformer_ggm_1bit
+```
+
+**PTB-XL** (the test set has to be downloaded by hand first, see [Test sets](#test-sets)):
+
+```bash
 python evaluate.py ptbxl medformer_ggm_1bit
-python evaluate.py tinyimagenet all              # every checkpoint of one dataset
-python evaluate.py list                          # all models
+```
+
+The other checkpoints (1.58-bit, N = 2 and N = 3) are run the same way. To list the names of all
+models, or to run every checkpoint of a dataset:
+
+```bash
+python evaluate.py list
+python evaluate.py tinyimagenet all
 ```
 
 With bash (Linux, macOS, WSL), `bash run_eval.sh` can be used in place of `python evaluate.py`,
@@ -103,28 +138,6 @@ python evaluate.py imagenet resnet34_ggm_1bit_N1 --data_root /datasets/imagenet
 python evaluate.py adftd medformer_ggm_1bit --data_root /datasets/ADFTD
 python evaluate.py --help                                                      # full option list
 ```
-
-## Models
-
-| Dataset | Model | Architecture | Bits (act / weight) | N |
-|---|---|---|---|---:|
-| tinyimagenet | `resnet18_ggm_1bit_N1` | ResNet-18 | 1 / 1 | 1 |
-| tinyimagenet | `resnet18_ggm_1.58bit_N1` | ResNet-18 | 1.58 / 1.58 | 1 |
-| tinyimagenet | `resnet18_ggm_1bit_N2` | ResNet-18 | 1 / 1 | 2 |
-| tinyimagenet | `resnet18_ggm_1bit_N3` | ResNet-18 | 1 / 1 | 3 |
-| tinyimagenet | `resnet34_ggm_1bit_N1` | ResNet-34 | 1 / 1 | 1 |
-| tinyimagenet | `resnet34_ggm_1.58bit_N1` | ResNet-34 | 1.58 / 1.58 | 1 |
-| tinyimagenet | `resnet34_ggm_1bit_N2` | ResNet-34 | 1 / 1 | 2 |
-| imagenet | `resnet18_ggm_1bit_N1` | ResNet-18 | 1 / 1 | 1 |
-| imagenet | `resnet34_ggm_1bit_N1` | ResNet-34 | 1 / 1 | 1 |
-| cifar10 | `resnet18_ggm_1bit_N1` | ResNet-18 | 1 / 1 | 1 |
-| cifar10 | `vgg16_ggm_1bit_N1` | VGG-16 | 1 / 1 | 1 |
-| adftd | `medformer_ggm_1bit` | Medformer | 1 / 1 | 1 |
-| ptbxl | `medformer_ggm_1bit` | Medformer | 1 / 1 | 1 |
-
-1.58-bit means ternary {-1, 0, +1} quantization. N is the projection factor: each GGM layer uses
-N x (layer input size) random projection directions; for a convolution the input size is
-input channels x kernel size.
 
 ## Test sets
 

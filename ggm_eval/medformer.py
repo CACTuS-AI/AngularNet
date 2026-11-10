@@ -1,4 +1,4 @@
-"""Medformer classifier with GGM attention projections and feed-forward layers."""
+"""Medformer with GGM layers."""
 from __future__ import annotations
 
 import math

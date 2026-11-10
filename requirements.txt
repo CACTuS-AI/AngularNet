@@ -1,5 +1,4 @@
-# PyTorch's package index: CUDA builds of torch/torchvision for Windows and Linux.
-# They use an NVIDIA GPU when one is available and run on the CPU otherwise.
+# PyTorch index with CUDA builds for Windows and Linux (they also run on the CPU).
 --extra-index-url https://download.pytorch.org/whl/cu132
 torch>=2.5,<=2.15.0
 torchvision>=0.20,<=0.29.1

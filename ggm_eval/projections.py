@@ -1,4 +1,4 @@
-"""Projection matrices G, rebuilt from their seeds."""
+"""Projection matrices G, rebuilt from seeds."""
 from __future__ import annotations
 
 import contextlib

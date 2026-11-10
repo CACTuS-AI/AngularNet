@@ -1,5 +1,4 @@
-"""ResNets with GGM convolutions (stem, BatchNorm and classifier full precision):
-TinyImageNet ResNet-18/34, ImageNet ResNet-18/34 (timm), CIFAR-10 ResNet-18."""
+"""ResNets with GGM convolutions."""
 from __future__ import annotations
 
 import timm

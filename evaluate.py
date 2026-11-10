@@ -1,13 +1,5 @@
 #!/usr/bin/env python
-"""Evaluate GGM checkpoints on the TinyImageNet-200, ImageNet-1k, CIFAR-10, ADFTD or PTB-XL test set.
-
-usage:
-  python evaluate.py tinyimagenet resnet18_ggm_1bit_N1   one model
-  python evaluate.py imagenet all                        every checkpoint of a dataset
-  python evaluate.py cifar10 resnet18_ggm_1bit_N1
-  python evaluate.py adftd medformer_ggm_1bit
-  python evaluate.py list                                all available models
-"""
+"""Evaluate GGM checkpoints on their test sets."""
 from __future__ import annotations
 
 import argparse

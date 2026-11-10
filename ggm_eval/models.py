@@ -1,4 +1,4 @@
-"""Released models, per dataset."""
+"""Released models."""
 MODELS = {
     "tinyimagenet": {
         "resnet18_ggm_1bit_N1":    dict(arch="resnet18", bits="1/1",       N=1),

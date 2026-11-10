@@ -1,9 +1,4 @@
-"""Checkpoint loading. Every G is rebuilt from its seed; no G is stored in the checkpoints.
-
-Two formats are used:
-  tinyimagenet, adftd, ptbxl   {"format", "meta" (architecture and one seed per GGM layer), "state_dict"}
-  imagenet, cifar10            {"model": state_dict}, with a G_seed buffer in every GGM layer
-"""
+"""Checkpoint loading."""
 from __future__ import annotations
 
 import torch
