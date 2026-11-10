@@ -1,11 +1,14 @@
 """Test sets."""
 from __future__ import annotations
 
+import csv
 import hashlib
+import html
 import io
 import os
 import re
 import shutil
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -13,7 +16,7 @@ import numpy as np
 import torch
 from PIL import Image
 from sklearn.preprocessing import StandardScaler
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, TensorDataset
 from torchvision import datasets, transforms
 
 IMAGENET_MEAN, IMAGENET_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
@@ -26,6 +29,9 @@ def load_test_set(dataset: str, root: str, download: bool = True):
         return imagenet_test_set(root)
     if dataset == "cifar10":
         return cifar10_test_set(root, download=download)
+    if dataset in GLUE:
+        return GlueDevSet(dataset, ensure_glue(dataset, root, download=download))
+    root = ensure_timeseries(dataset, root, download=download)
     print(f"loading the {TIMESERIES[dataset]['name']} test set from {root} ...", flush=True)
     return TimeSeriesTest(dataset, root)
 
@@ -311,10 +317,73 @@ def cifar10_test_set(root: str, download: bool = True):
 # ---------------------------------------------------------------------- ADFTD, PTB-XL
 
 TIMESERIES = {
-    "adftd": dict(name="ADFTD", channels=19, length=256, classes=("HC", "FTD", "AD")),
-    "ptbxl": dict(name="PTB-XL", channels=12, length=250, classes=("NORM", "MI", "STTC", "CD", "HYP")),
+    "adftd": dict(name="ADFTD", channels=19, length=256, classes=("HC", "FTD", "AD"),
+                  drive_id="1QcX_M58IQUBn3lDBlVVL0SDN7_QI1vWe", size="2.6 GB"),
+    "ptbxl": dict(name="PTB-XL", channels=12, length=250, classes=("NORM", "MI", "STTC", "CD", "HYP"),
+                  drive_id="1whskRvTZUNb1Qph2SeXEdpcU2rQY0T1E", size="3.3 GB"),
 }
 TEST_START = 0.8  # per class, in label.npy order, the last 20 % of subjects are the test set
+DRIVE_URL = "https://drive.google.com/uc?export=download&id={}"
+
+
+def _open_drive_file(file_id: str):
+    """Open a public Google Drive file; large files first need the 'Download anyway' confirmation."""
+    headers = {"User-Agent": USER_AGENT}
+    r = urllib.request.urlopen(urllib.request.Request(DRIVE_URL.format(file_id), headers=headers), timeout=60)
+    if r.headers.get_content_type() != "text/html":
+        return r
+    page = r.read().decode("utf-8", "replace")
+    r.close()
+    form = re.search(r'<form[^>]*id="download-form"[^>]*action="([^"]+)"', page)
+    fields = dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)"', page))
+    if form is None or "id" not in fields:
+        raise OSError("Google Drive did not offer the file (its daily download quota may be used up; "
+                      "try again later)")
+    url = html.unescape(form.group(1)) + "?" + urllib.parse.urlencode(fields)
+    r = urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60)
+    if r.headers.get_content_type() == "text/html":
+        r.close()
+        raise OSError("Google Drive returned a web page instead of the file (its daily download quota "
+                      "may be used up; try again later)")
+    return r
+
+
+def ensure_timeseries(dataset: str, root: str, download: bool = True) -> str:
+    """Return `root`, downloading and unpacking the processed dataset into it if needed."""
+    try:
+        _timeseries_layout(root)
+        return root
+    except FileNotFoundError:
+        if not download:
+            raise
+    spec = TIMESERIES[dataset]
+    os.makedirs(root, exist_ok=True)
+    tmp = os.path.join(root, f"{dataset}.zip.part")
+    print(f"[data] {spec['name']} not found; downloading it ({spec['size']}) from Google Drive to {root}")
+    with _open_drive_file(spec["drive_id"]) as r, open(tmp, "wb") as out:
+        total, got = int(r.headers.get("Content-Length", 0)), 0
+        while True:
+            c = r.read(1 << 20)
+            if not c:
+                break
+            out.write(c)
+            got += len(c)
+            print(f"\r  download: {got / 1e9:5.2f} / {total / 1e9:.2f} GB", end="", flush=True)
+    print()
+    with zipfile.ZipFile(tmp) as zf:   # <top folder>/Feature/..., <top folder>/Label/label.npy
+        members = [m for m in zf.infolist() if not m.is_dir() and len(m.filename.split("/")) == 3
+                   and m.filename.split("/")[1] in ("Feature", "Label")]
+        for i, m in enumerate(members, 1):
+            target = os.path.join(root, *m.filename.split("/")[1:])
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(m) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            if i % 500 == 0 or i == len(members):
+                print(f"\r  extracting: {i}/{len(members)} files", end="", flush=True)
+    print()
+    os.remove(tmp)
+    _timeseries_layout(root)
+    return root
 
 
 def _natural_key(s: str):
@@ -379,3 +448,91 @@ class TimeSeriesTest(Dataset):
 
     def __getitem__(self, i):
         return self.X[i], self.y[i]
+
+
+# ---------------------------------------------------------------------- SST-2, QNLI (GLUE)
+
+GLUE_URL = "https://dl.fbaipublicfiles.com/glue/data/{}"
+GLUE = {
+    "sst2": dict(name="SST-2", archive="SST-2.zip", member="SST-2/dev.tsv", size="7 MB", examples=872,
+                 classes=("0", "1"),
+                 sha256="54a9c12c77e402fc14d6a66a506f24d999f596b0176eb777c972cccc2f9cc4b0"),
+    "qnli": dict(name="QNLI", archive="QNLIv2.zip", member="QNLI/dev.tsv", size="11 MB", examples=5463,
+                 classes=("entailment", "not_entailment"),
+                 sha256="ac19409dcb04631eaaa094bdebdcf621086bc352503dfb6a1a648b614986f4fd"),
+}
+
+
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def ensure_glue(dataset: str, root: str, download: bool = True) -> str:
+    """Return the path of dev.tsv in `root`, downloading it from the GLUE archive if needed."""
+    spec = GLUE[dataset]
+    path = os.path.join(root, "dev.tsv")
+    if os.path.isfile(path):
+        return path
+    if not download:
+        raise FileNotFoundError(f"{spec['name']} dev set not found: expected {path}")
+    os.makedirs(root, exist_ok=True)
+    url, tmp = GLUE_URL.format(spec["archive"]), os.path.join(root, spec["archive"] + ".part")
+    print(f"[data] {spec['name']} not found; downloading {url} ({spec['size']}) to {root}")
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as out:
+        shutil.copyfileobj(r, out)
+    with zipfile.ZipFile(tmp) as zf, zf.open(spec["member"]) as src, open(path + ".part", "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    os.remove(tmp)
+    if _sha256(path + ".part") != spec["sha256"]:
+        os.remove(path + ".part")
+        raise RuntimeError(f"the downloaded {spec['name']} dev.tsv does not match the official GLUE file")
+    os.replace(path + ".part", path)
+    return path
+
+
+class GlueDevSet:
+    """GLUE dev split as (text_a, text_b, label) examples; encode() turns it into model inputs."""
+
+    def __init__(self, dataset: str, path: str):
+        spec = GLUE[dataset]
+        self.root, self.classes = os.path.dirname(path), spec["classes"]
+        label_ids = {c: i for i, c in enumerate(self.classes)}
+        with open(path, encoding="utf-8") as f:
+            rows = list(csv.reader(f, delimiter="\t", quoting=csv.QUOTE_NONE))[1:]
+        if dataset == "sst2":   # sentence, label
+            self.examples = [(r[0], None, label_ids[r[1]]) for r in rows]
+        else:                   # index, question, sentence, label
+            self.examples = [(r[1], r[2], label_ids[r[-1]]) for r in rows]
+        if len(self.examples) != spec["examples"]:
+            print(f"[data] warning: found {len(self.examples):,} examples (expected {spec['examples']:,})")
+
+    def __len__(self):
+        return len(self.examples)
+
+    def encode(self, tokenizer, max_len: int):
+        """[CLS] a [SEP] (b [SEP]), truncated to max_len (longer sequence first) and zero padded."""
+        ids, segments, masks = [], [], []
+        for text_a, text_b, _ in self.examples:
+            a = tokenizer.tokenize(text_a)
+            b = tokenizer.tokenize(text_b) if text_b else None
+            if b is not None:
+                while len(a) + len(b) > max_len - 3:
+                    (a if len(a) > len(b) else b).pop()
+            else:
+                a = a[:max_len - 2]
+            tokens = ["[CLS]"] + a + ["[SEP]"]
+            seg = [0] * len(tokens)
+            if b:
+                tokens += b + ["[SEP]"]
+                seg += [1] * (len(b) + 1)
+            pad = max_len - len(tokens)
+            ids.append(tokenizer.convert_tokens_to_ids(tokens) + [0] * pad)
+            segments.append(seg + [0] * pad)
+            masks.append([1] * len(tokens) + [0] * pad)
+        labels = [e[2] for e in self.examples]
+        return TensorDataset(torch.tensor(ids), torch.tensor(segments), torch.tensor(masks), torch.tensor(labels))

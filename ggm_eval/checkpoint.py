@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import torch
 
-from .layers import Conv1dGGM, LinearGGM, ScaledConv2dGGM
+from .bert import BertGGM
+from .layers import Conv1dGGM, LinearGGM, PackedLinearGGM, ScaledConv2dGGM
 from .medformer import MedformerGGM
 from .models import MODELS
 from .projections import G_THREADS, cpu_threads, make_G, make_G_conv1d, make_G_conv2d
@@ -36,7 +37,7 @@ def _load_seed_model(model, ckpt: dict, layer_types):
             elif isinstance(m, Conv1dGGM):
                 key = ("conv1d", seeds[name], m.groups, m.N, m.cin_g, m.kernel_size)
                 make = lambda: make_G_conv1d(seeds[name], m.groups, m.N, m.cin_g, m.kernel_size)
-            else:
+            else:  # LinearGGM, PackedLinearGGM
                 key = ("linear", seeds[name], m.N, m.in_features)
                 make = lambda: make_G(seeds[name], m.N, m.in_features)
             if key not in cache:
@@ -66,6 +67,11 @@ def load_model(dataset: str, path: str, name: str):
     if dataset in ("adftd", "ptbxl"):
         ckpt = _seed_checkpoint(path)
         return _load_seed_model(MedformerGGM(**ckpt["meta"]["model"]), ckpt, (LinearGGM, Conv1dGGM))
+    if dataset in ("sst2", "qnli"):  # also returns the tokenizer settings stored with the model
+        ckpt = _seed_checkpoint(path)
+        model = _load_seed_model(BertGGM(**ckpt["meta"]["model"]), ckpt, PackedLinearGGM)
+        model.vocab, model.max_seq_length = ckpt["meta"]["vocab"], ckpt["meta"]["max_seq_length"]
+        return model
     m = MODELS[dataset][name]
     if dataset == "imagenet":
         model = build_imagenet_resnet(m["arch"], N_factor=m["N"])

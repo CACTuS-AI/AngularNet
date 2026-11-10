@@ -8,6 +8,7 @@ This repository contains the evaluation code and checkpoints for the trained GGM
 - ResNet-18 / ResNet-34 on the TinyImageNet-200 and ImageNet-1k test sets
 - ResNet-18 and VGG-16 on the CIFAR-10 test set
 - Medformer on the ADFTD (EEG) and PTB-XL (ECG) test sets
+- BERT-base (BiBERT setup) on the SST-2 and QNLI dev sets of GLUE
 
 All commands below are run from the repository root.
 
@@ -85,20 +86,32 @@ python evaluate.py cifar10 resnet18_ggm_1bit_N1
 python evaluate.py cifar10 vgg16_ggm_1bit_N1
 ```
 
-**ADFTD** (the test set has to be downloaded by hand first, see [Test sets](#test-sets)):
+**ADFTD** (the dataset is downloaded automatically on first use, 2.6 GB):
 
 ```bash
 python evaluate.py adftd medformer_ggm_1bit
 ```
 
-**PTB-XL** (the test set has to be downloaded by hand first, see [Test sets](#test-sets)):
+**PTB-XL** (the dataset is downloaded automatically on first use, 3.3 GB):
 
 ```bash
 python evaluate.py ptbxl medformer_ggm_1bit
 ```
 
-The other checkpoints (1.58-bit, N = 2 and N = 3) are run the same way. To list the names of all
-models, or to run every checkpoint of a dataset:
+**SST-2** (the dev set is downloaded automatically on first use):
+
+```bash
+python evaluate.py sst2 bert_ggm_1bit_N1
+```
+
+**QNLI** (the dev set is downloaded automatically on first use):
+
+```bash
+python evaluate.py qnli bert_ggm_1bit_N1
+```
+
+The 1.58-bit checkpoints (`resnet18_ggm_1.58bit_N1`, `resnet34_ggm_1.58bit_N1`) are run the same
+way. To list the names of all models, or to run every checkpoint of a dataset:
 
 ```bash
 python evaluate.py list
@@ -109,23 +122,25 @@ With bash (Linux, macOS, WSL), `bash run_eval.sh` can be used in place of `pytho
 with the same arguments, e.g. `bash run_eval.sh cifar10 vgg16_ggm_1bit_N1`.
 
 Checkpoints are read from `checkpoints/<dataset>/<model>.pt` and test sets from
-`data/<dataset>/`.
+`data/<dataset>/`. In the checkpoints, the binary weights of the GGM layers are stored as packed bits
+(1 bit per weight; 2 bits per weight for the 1.58-bit models), and each projection matrix G is stored
+as the seed it is rebuilt from when the model is loaded.
 
 ## Options
 
 ```
-python evaluate.py <tinyimagenet|imagenet|cifar10|adftd|ptbxl> <model|all|list> [options]
+python evaluate.py <tinyimagenet|imagenet|cifar10|adftd|ptbxl|sst2|qnli> <model|all|list> [options]
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--device cuda` / `--device cpu` | `cuda` if a GPU is available, else `cpu` | where to run |
-| `--batch_size N` | 64 (images), 128 (ADFTD, PTB-XL) | images or samples per batch; lower it if the GPU runs out of memory |
+| `--batch_size N` | 64 (images), 128 (ADFTD, PTB-XL), 32 (SST-2, QNLI) | images or samples per batch; lower it if the GPU runs out of memory |
 | `--limit_batches N` | 0 (all) | stop after N batches, as a quick check that everything runs; the result is not comparable to a full run |
 | `--num_workers N` | min(8, number of CPUs) | processes that load images (image datasets only) |
-| `--data_root DIR` | `data/<dataset>` | where the test set is (TinyImageNet and CIFAR-10 are downloaded there) |
+| `--data_root DIR` | `data/<dataset>` | where the test set is (test sets that are downloaded automatically go there) |
 | `--checkpoint_dir DIR` | `checkpoints/<dataset>` | where the `.pt` files are |
-| `--no_download` | off | TinyImageNet, CIFAR-10: stop with an error instead of downloading the test set |
+| `--no_download` | off | stop with an error instead of downloading the test set (all datasets except ImageNet) |
 | `--json_out FILE` | none | also write the results to a JSON file |
 
 Examples:
@@ -178,7 +193,10 @@ torchvision from `https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz` (163 
 `data/cifar10/`. An existing copy can be used with `--data_root <dir>` (the directory containing
 `cifar-10-batches-py/`).
 
-**ADFTD and PTB-XL.** These have to be downloaded by hand:
+**ADFTD and PTB-XL.** The processed datasets of Medformer are downloaded automatically on first use
+from Google Drive (ADFTD 2.6 GB, PTB-XL 3.3 GB) and unpacked into `data/adftd/` and `data/ptbxl/`;
+the archive is deleted afterwards. If Google Drive refuses the download (it limits how often a file
+can be downloaded per day), download them by hand instead:
 
 1. Download the processed datasets:
 
@@ -197,6 +215,14 @@ torchvision from `https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz` (163 
    An existing copy elsewhere can be used with `--data_root <dir>` (the directory that contains
    `Feature/` and `Label/`).
 
+**SST-2 and QNLI.** As in the paper, the models are evaluated on the GLUE dev splits (the test
+splits have no public labels): 872 sentences for SST-2 and 5,463 question/sentence pairs for QNLI.
+On first use `dev.tsv` is taken from the official GLUE archive
+(`https://dl.fbaipublicfiles.com/glue/data/SST-2.zip`, 7 MB, and `.../QNLIv2.zip`, 11 MB),
+checked against its SHA-256 and saved as `data/sst2/dev.tsv` and `data/qnli/dev.tsv`; the archive is
+deleted afterwards. An existing copy can be used with `--data_root <dir>` (the directory containing
+`dev.tsv`).
+
 ## Files
 
 ```
@@ -206,10 +232,12 @@ requirements.txt
 checkpoints/<dataset>/    <model>.pt
 ggm_eval/
   projections.py          projection matrices G, rebuilt from their seeds
-  layers.py               GGM layers: 2-D convolutions, 1-D convolution, linear
+  layers.py               GGM layers (2-D and 1-D convolutions, linear) with packed weights
   resnet.py               ResNets for TinyImageNet, ImageNet (timm) and CIFAR-10
   vgg.py                  VGG-16 for CIFAR-10
   medformer.py            Medformer for ADFTD and PTB-XL
+  bert.py                 BERT-base for SST-2 and QNLI
+  tokenization.py         BERT WordPiece tokenizer
   models.py               list of released models
   checkpoint.py           checkpoint loading
   data.py                 test sets (download and loading)

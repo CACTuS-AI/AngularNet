@@ -22,7 +22,9 @@ from torch.utils.data import DataLoader
 HERE = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DATASETS = ("tinyimagenet", "imagenet", "cifar10")
 TIMESERIES_DATASETS = ("adftd", "ptbxl")
-DATASETS = IMAGE_DATASETS + TIMESERIES_DATASETS
+TEXT_DATASETS = ("sst2", "qnli")
+DATASETS = IMAGE_DATASETS + TIMESERIES_DATASETS + TEXT_DATASETS
+ALIASES = {"sst-2": "sst2"}
 
 
 def parse_args():
@@ -34,9 +36,11 @@ def parse_args():
     p.add_argument("--list", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--checkpoint_dir", default=None, help="default: checkpoints/<dataset>")
     p.add_argument("--data_root", default=None, help="default: data/<dataset>")
-    p.add_argument("--no_download", action="store_true", help="tinyimagenet, cifar10: fail instead of downloading the test set")
+    p.add_argument("--no_download", action="store_true",
+                   help="fail instead of downloading the test set (all datasets except imagenet)")
     p.add_argument("--device", default=None, help="cuda or cpu (default: cuda if available)")
-    p.add_argument("--batch_size", type=int, default=None, help="default: 64 for images, 128 for time series")
+    p.add_argument("--batch_size", type=int, default=None,
+                   help="default: 64 for images, 128 for time series, 32 for text")
     p.add_argument("--num_workers", type=int, default=min(8, os.cpu_count() or 1), help="image datasets only")
     p.add_argument("--limit_batches", type=int, default=0, help="smoke test: stop after this many batches")
     p.add_argument("--json_out", default="", help="also write the results to this JSON file")
@@ -50,6 +54,7 @@ def parse_args():
             p.error("'list' takes no model name")
         args.list = True
     elif t:
+        t[0] = ALIASES.get(t[0].lower(), t[0])
         if t[0].lower() not in DATASETS:
             p.error(f"unknown dataset {t[0]!r} (use {', '.join(DATASETS)})")
         args.dataset = t[0].lower()
@@ -61,7 +66,8 @@ def parse_args():
         p.print_usage()
         args.list = True
     if args.batch_size is None:
-        args.batch_size = 128 if args.dataset in TIMESERIES_DATASETS else 64
+        args.batch_size = (128 if args.dataset in TIMESERIES_DATASETS else
+                           32 if args.dataset in TEXT_DATASETS else 64)
     return args
 
 
@@ -101,6 +107,22 @@ def evaluate_images(model, loader, device, amp_dtype, channels_last, limit_batch
     return {"top1": 100 * correct1 / n, "top5": 100 * correct5 / n, "loss": loss_sum / n, "images": n}
 
 
+@torch.inference_mode()
+def evaluate_text(model, loader, device, limit_batches=0):
+    n = correct = 0
+    loss_sum = 0.0
+    for i, (ids, segments, mask, labels) in enumerate(loader):
+        if limit_batches and i >= limit_batches:
+            break
+        logits = model(ids.to(device), segments.to(device), mask.to(device)).float().cpu()
+        correct += (logits.argmax(1) == labels).sum().item()
+        loss_sum += F.cross_entropy(logits, labels, reduction="sum").item()
+        n += labels.size(0)
+        print(f"\r  evaluating: {n:,}/{len(loader.dataset):,} examples", end="", flush=True)
+    print()
+    return {"accuracy": 100 * correct / n, "loss": loss_sum / n, "examples": n}
+
+
 def main():
     args = parse_args()
     if args.list and not args.dataset:
@@ -112,6 +134,7 @@ def main():
         print(f"error: give a dataset ({', '.join(DATASETS)})", file=sys.stderr)
         return 2
     timeseries = args.dataset in TIMESERIES_DATASETS
+    text = args.dataset in TEXT_DATASETS
     ckpt_dir = args.checkpoint_dir or os.path.join(HERE, "checkpoints", args.dataset)
     data_root = args.data_root or os.path.join(HERE, "data", args.dataset)
     if args.list:
@@ -146,9 +169,9 @@ def main():
     if device.type == "cuda" and not torch.cuda.is_available():
         print("error: --device cuda requested but no CUDA GPU is available", file=sys.stderr)
         return 1
-    # per-dataset settings: tinyimagenet bf16 + TF32, cifar10 fp32 + TF32, imagenet and time series fp32
+    # per-dataset settings: tinyimagenet bf16 + TF32, cifar10 fp32 + TF32, all others fp32
     amp_dtype = torch.bfloat16 if (args.dataset == "tinyimagenet" and device.type == "cuda") else None
-    channels_last = not timeseries and (device.type == "cuda" or args.dataset == "imagenet")
+    channels_last = args.dataset in IMAGE_DATASETS and (device.type == "cuda" or args.dataset == "imagenet")
     if device.type == "cuda":
         if args.dataset in ("tinyimagenet", "cifar10"):
             torch.backends.cuda.matmul.allow_tf32 = True
@@ -161,20 +184,20 @@ def main():
     try:
         dataset = load_test_set(args.dataset, data_root, download=not args.no_download)
     except FileNotFoundError as e:
-        if timeseries:
-            hint = ". See 'Test sets' in README.md, or pass --data_root <dir>."
-        elif args.dataset in ("tinyimagenet", "cifar10"):
-            hint = ". Remove --no_download to download it, or pass --data_root <dir>."
-        else:
-            hint = ""
+        hint = "" if args.dataset == "imagenet" else ". Remove --no_download to download it, or pass --data_root <dir>."
         print(f"error: {e}{hint}", file=sys.stderr)
         return 1
     except (urllib.error.URLError, OSError, RuntimeError, ValueError) as e:
-        print(f"error: could not prepare the {args.dataset} test set: {e}", file=sys.stderr)
+        hint = (". It can also be downloaded by hand (see 'Test sets' in README.md) "
+                "and passed with --data_root <dir>." if timeseries or text else "")
+        print(f"error: could not prepare the {args.dataset} test set: {e}{hint}", file=sys.stderr)
         return 1
     if timeseries:  # the test set is already in memory
         loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
         what = f"{len(dataset):,} samples from {dataset.subjects} subjects"
+    elif text:  # tokenized per model, with the vocabulary stored in its checkpoint
+        loader = None
+        what = f"{len(dataset):,} examples (GLUE dev split)"
     else:
         loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
                             num_workers=args.num_workers, pin_memory=device.type == "cuda")
@@ -201,6 +224,14 @@ def main():
             line = "   ".join(f"{k} {r[k]:.2f} %" for k in ("accuracy", "precision", "recall", "f1", "auroc", "auprc")
                              if k in r)
             unit = "samples"
+        elif text:
+            from ggm_eval.tokenization import BertTokenizer
+            encoded = dataset.encode(BertTokenizer(model.vocab), model.max_seq_length)
+            loader = DataLoader(encoded, batch_size=args.batch_size, shuffle=False)
+            r = evaluate_text(model, loader, device, args.limit_batches)
+            n = r["examples"]
+            line = f"accuracy {r['accuracy']:.2f} %"
+            unit = "examples"
         else:
             if device.type == "cuda":  # 4-D tensors only: 5-D projection buffers stay as they are
                 for t in list(model.parameters()) + list(model.buffers()):
@@ -218,7 +249,7 @@ def main():
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-    if len(results) > 1 and not timeseries:
+    if len(results) > 1 and args.dataset in IMAGE_DATASETS:
         print(f"\n{'model':<26} {'top-1':>7} {'top-5':>7}  images")
         for r in results:
             print(f"{r['model']:<26} {r['top1']:>6.2f}% {r['top5']:>6.2f}%  {r['images']:,}")

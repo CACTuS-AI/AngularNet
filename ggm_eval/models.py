@@ -3,11 +3,8 @@ MODELS = {
     "tinyimagenet": {
         "resnet18_ggm_1bit_N1":    dict(arch="resnet18", bits="1/1",       N=1),
         "resnet18_ggm_1.58bit_N1": dict(arch="resnet18", bits="1.58/1.58", N=1),
-        "resnet18_ggm_1bit_N2":    dict(arch="resnet18", bits="1/1",       N=2),
-        "resnet18_ggm_1bit_N3":    dict(arch="resnet18", bits="1/1",       N=3),
         "resnet34_ggm_1bit_N1":    dict(arch="resnet34", bits="1/1",       N=1),
         "resnet34_ggm_1.58bit_N1": dict(arch="resnet34", bits="1.58/1.58", N=1),
-        "resnet34_ggm_1bit_N2":    dict(arch="resnet34", bits="1/1",       N=2),
     },
     "imagenet": {
         "resnet18_ggm_1bit_N1": dict(arch="resnet18", bits="1/1", N=1),
@@ -22,6 +19,12 @@ MODELS = {
     },
     "ptbxl": {
         "medformer_ggm_1bit": dict(arch="Medformer", bits="1/1", N=1),
+    },
+    "sst2": {
+        "bert_ggm_1bit_N1": dict(arch="BERT-base", bits="1/1", N=1),
+    },
+    "qnli": {
+        "bert_ggm_1bit_N1": dict(arch="BERT-base", bits="1/1", N=1),
     },
 }
 
