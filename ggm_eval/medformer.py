@@ -82,18 +82,26 @@ class MedformerLayer(nn.Module):
 
 
 class EncoderLayer(nn.Module):
-    def __init__(self, num_blocks: int, d_model: int, n_heads: int, d_ff: int):
+    def __init__(self, num_blocks: int, d_model: int, n_heads: int, d_ff: int, gains: bool = False,
+                 center_ffn_input: bool = True):
         super().__init__()
+        # learned per-channel gains on the attention and feed-forward branches (PTB-XL model)
+        self.attn_gain = nn.Parameter(torch.ones(d_model)) if gains else None
+        self.ffn_gain = nn.Parameter(torch.ones(d_model)) if gains else None
         self.attention = MedformerLayer(num_blocks, d_model, n_heads)
-        self.conv1 = Conv1dGGM(d_model, d_ff, kernel_size=1, N_factor=1.0)
-        self.conv2 = Conv1dGGM(d_ff, d_model, kernel_size=1, N_factor=1.0)
+        self.conv1 = Conv1dGGM(d_model, d_ff, kernel_size=1, N_factor=1.0, center_x=center_ffn_input)
+        self.conv2 = Conv1dGGM(d_ff, d_model, kernel_size=1, N_factor=1.0, center_x=center_ffn_input)
         self.norm1 = BinaryNorm(d_model)
         self.norm2 = BinaryNorm(d_model)
 
     def forward(self, xs):
-        xs = [self.norm1(x + a) for x, a in zip(xs, self.attention(xs))]
+        xs = [self.norm1(x + self._gain(self.attn_gain, a)) for x, a in zip(xs, self.attention(xs))]
         ys = [self.conv2(F.relu(self.conv1(x.transpose(-1, 1)))).transpose(-1, 1) for x in xs]
-        return [self.norm2(x + y) for x, y in zip(xs, ys)]
+        return [self.norm2(x + self._gain(self.ffn_gain, y)) for x, y in zip(xs, ys)]
+
+    @staticmethod
+    def _gain(g, t):
+        return t if g is None else g * t
 
 
 class Encoder(nn.Module):
@@ -112,12 +120,13 @@ class MedformerGGM(nn.Module):
     """Input [batch, seq_len, enc_in] -> logits [batch, num_class]."""
 
     def __init__(self, enc_in: int, seq_len: int, num_class: int, d_model: int = 128, n_heads: int = 8,
-                 e_layers: int = 6, d_ff: int = 256, patch_lens=PATCH_LENS):
+                 e_layers: int = 6, d_ff: int = 256, patch_lens=PATCH_LENS, gains: bool = False,
+                 center_ffn_input: bool = True):
         super().__init__()
         patch_lens = tuple(int(p) for p in patch_lens)
         patch_nums = [int((seq_len - p) / p + 2) for p in patch_lens]
         self.enc_embedding = ListPatchEmbedding(enc_in, d_model, patch_lens)
-        self.encoder = Encoder([EncoderLayer(len(patch_lens), d_model, n_heads, d_ff) for _ in range(e_layers)],
+        self.encoder = Encoder([EncoderLayer(len(patch_lens), d_model, n_heads, d_ff, gains, center_ffn_input) for _ in range(e_layers)],
                                d_model)
         self.projection = nn.Linear(d_model * sum(patch_nums), num_class)
 

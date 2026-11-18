@@ -143,7 +143,7 @@ class Conv2dGGM(_PackedWeights):
     G is rebuilt from G_seed whenever weights are loaded."""
 
     def __init__(self, in_channels: int, out_channels: int, kernel_size, N_factor: float = 1.0,
-                 stride=1, padding=0, groups: int = 1, bias: bool = False):
+                 stride=1, padding=0, groups: int = 1, bias: bool = False, scale: bool = False):
         super().__init__()
         if in_channels % groups or out_channels % groups:
             raise ValueError("in_channels and out_channels must be divisible by groups")
@@ -158,6 +158,7 @@ class Conv2dGGM(_PackedWeights):
 
         self.bias = nn.Parameter(torch.zeros(self.out_channels)) if bias else None
         self.register_buffer("w_packed", torch.zeros(self.out_channels, packed_bytes(self.N), dtype=torch.uint8))
+        self.register_buffer("scale", torch.ones(self.out_channels) if scale else None)  # per-output scale
         self.register_buffer("G_seed", torch.zeros(1, dtype=torch.int64))
         self.register_buffer("G", torch.empty(0), persistent=False)
         self.register_load_state_dict_post_hook(lambda module, _: module.regenerate_G())
@@ -181,6 +182,8 @@ class Conv2dGGM(_PackedWeights):
                           -torch.ones((), device=z.device, dtype=z.dtype))
 
         y = F.conv2d(z_b, self.unpacked().to(dtype=z_b.dtype), bias=None, stride=1, padding=0, groups=g) / float(N)
+        if self.scale is not None:
+            y = y * self.scale.reshape(1, -1, 1, 1)
         if self.bias is not None:
             y = y + self.bias.reshape(1, -1, 1, 1)
         return y
@@ -216,12 +219,13 @@ class Conv1dGGM(_PackedWeights):
     """Sign GGM 1-D convolution (Medformer). G is set by the checkpoint loader."""
 
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 1,
-                 N_factor: float = 1.0, groups: int = 1):
+                 N_factor: float = 1.0, groups: int = 1, center_x: bool = True):
         super().__init__()
         if in_channels % groups or out_channels % groups:
             raise ValueError("in_channels and out_channels must be divisible by groups")
         self.in_channels, self.out_channels = int(in_channels), int(out_channels)
         self.kernel_size, self.groups = int(kernel_size), int(groups)
+        self.center_x = bool(center_x)  # subtract the input mean before projecting
         self.cin_g = self.in_channels // self.groups
         self.cout_g = self.out_channels // self.groups
         self.K = self.cin_g * self.kernel_size
@@ -238,7 +242,8 @@ class Conv1dGGM(_PackedWeights):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         g, N = self.groups, self.N
-        x = x - x.mean(dim=(1, 2), keepdim=True)
+        if self.center_x:
+            x = x - x.mean(dim=(1, 2), keepdim=True)
         G = self.G.to(device=x.device, dtype=x.dtype)
         z = F.conv1d(x, G.reshape(g * N, self.cin_g, self.kernel_size), groups=g)
         z_b = torch.where(z >= 0, 1.0, -1.0)

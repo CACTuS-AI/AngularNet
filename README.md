@@ -6,7 +6,7 @@ prepared from the ggd-vision research project.
 This repository contains the evaluation code and checkpoints for the trained GGM models:
 
 - ResNet-18 / ResNet-34 on the TinyImageNet-200 and ImageNet-1k test sets
-- ResNet-18 and VGG-16 on the CIFAR-10 test set
+- ResNet-18, ResNet-20 and VGG-16 on the CIFAR-10 test set
 - Medformer on the ADFTD (EEG) and PTB-XL (ECG) test sets
 - BERT-base (BiBERT setup) on the SST-2 and QNLI dev sets of GLUE
 
@@ -83,6 +83,7 @@ python evaluate.py imagenet resnet34_ggm_1bit_N1
 
 ```bash
 python evaluate.py cifar10 resnet18_ggm_1bit_N1
+python evaluate.py cifar10 resnet20_ggm_1bit_N1
 python evaluate.py cifar10 vgg16_ggm_1bit_N1
 ```
 
@@ -124,7 +125,9 @@ with the same arguments, e.g. `bash run_eval.sh cifar10 vgg16_ggm_1bit_N1`.
 Checkpoints are read from `checkpoints/<dataset>/<model>.pt` and test sets from
 `data/<dataset>/`. In the checkpoints, the binary weights of the GGM layers are stored as packed bits
 (1 bit per weight; 2 bits per weight for the 1.58-bit models), and each projection matrix G is stored
-as the seed it is rebuilt from when the model is loaded.
+as the seed it is rebuilt from when the model is loaded. G is built in float64 and rounded to float32
+once (the BERT models use the float32 construction their weights were packed with). All models are
+evaluated in plain fp32, without TF32 or mixed precision.
 
 ## Options
 
@@ -233,7 +236,7 @@ checkpoints/<dataset>/    <model>.pt
 ggm_eval/
   projections.py          projection matrices G, rebuilt from their seeds
   layers.py               GGM layers (2-D and 1-D convolutions, linear) with packed weights
-  resnet.py               ResNets for TinyImageNet, ImageNet (timm) and CIFAR-10
+  resnet.py               ResNets for TinyImageNet, ImageNet (timm) and CIFAR-10 (ResNet-18/20)
   vgg.py                  VGG-16 for CIFAR-10
   medformer.py            Medformer for ADFTD and PTB-XL
   bert.py                 BERT-base for SST-2 and QNLI

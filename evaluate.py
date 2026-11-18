@@ -85,7 +85,7 @@ def list_models(dataset: str, ckpt_dir: str):
 
 
 @torch.inference_mode()
-def evaluate_images(model, loader, device, amp_dtype, channels_last, limit_batches=0):
+def evaluate_images(model, loader, device, channels_last, limit_batches=0):
     n = correct1 = correct5 = 0
     loss_sum = 0.0
     for i, (imgs, labels) in enumerate(loader):
@@ -95,9 +95,8 @@ def evaluate_images(model, loader, device, amp_dtype, channels_last, limit_batch
         labels = labels.to(device, non_blocking=True)
         if channels_last:
             imgs = imgs.contiguous(memory_format=torch.channels_last)
-        with torch.autocast(device.type, dtype=amp_dtype or torch.float32, enabled=amp_dtype is not None):
-            logits = model(imgs)
-            loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
+        logits = model(imgs)
+        loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
         correct1 += (logits.argmax(1) == labels).sum().item()
         correct5 += (logits.float().topk(5, dim=1).indices == labels[:, None]).any(dim=1).sum().item()
         loss_sum += loss.item() * imgs.size(0)
@@ -169,13 +168,10 @@ def main():
     if device.type == "cuda" and not torch.cuda.is_available():
         print("error: --device cuda requested but no CUDA GPU is available", file=sys.stderr)
         return 1
-    # per-dataset settings: tinyimagenet bf16 + TF32, cifar10 fp32 + TF32, all others fp32
-    amp_dtype = torch.bfloat16 if (args.dataset == "tinyimagenet" and device.type == "cuda") else None
     channels_last = args.dataset in IMAGE_DATASETS and (device.type == "cuda" or args.dataset == "imagenet")
     if device.type == "cuda":
-        if args.dataset in ("tinyimagenet", "cifar10"):
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cuda.matmul.allow_tf32 = False  # every model runs in plain fp32
+        torch.backends.cudnn.allow_tf32 = False
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
 
@@ -237,7 +233,7 @@ def main():
                 for t in list(model.parameters()) + list(model.buffers()):
                     if t.dim() == 4:
                         t.data = t.data.contiguous(memory_format=torch.channels_last)
-            r = evaluate_images(model, loader, device, amp_dtype, channels_last, args.limit_batches)
+            r = evaluate_images(model, loader, device, channels_last, args.limit_batches)
             n = r["images"]
             line = f"top-1 {r['top1']:.2f} %   top-5 {r['top5']:.2f} %"
             unit = "images"

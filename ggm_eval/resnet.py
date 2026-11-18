@@ -112,49 +112,63 @@ def build_imagenet_resnet(arch: str, N_factor: float = 1.0, num_classes: int = 1
 
 # ---------------------------------------------------------------- CIFAR-10
 
-CIFAR_STAGES = {"resnet18": [2, 2, 2, 2]}
-CIFAR_CHANNELS = [64, 128, 256, 512]
+# ResNet-20 also has a per-output scale in each GGM convolution, a learned gain on the shortcut
+# and a classifier without bias
+CIFAR_RESNETS = {
+    "resnet18": dict(stages=(2, 2, 2, 2), channels=(64, 128, 256, 512), resnet20_style=False),
+    "resnet20": dict(stages=(3, 3, 3), channels=(16, 32, 64), resnet20_style=True),
+}
 
 
 class CifarBasicBlock(nn.Module):
-    def __init__(self, cin: int, cout: int, stride: int, N_factor: float):
+    def __init__(self, cin: int, cout: int, stride: int, N_factor: float, resnet20_style: bool = False):
         super().__init__()
-        self.conv1 = Conv2dGGM(cin, cout, 3, N_factor=N_factor, stride=stride, padding=1)
+        conv_kw = dict(N_factor=N_factor, scale=resnet20_style)
+        self.conv1 = Conv2dGGM(cin, cout, 3, stride=stride, padding=1, **conv_kw)
         self.bn1 = nn.BatchNorm2d(cout)
         self.act1 = nn.PReLU(num_parameters=cout)
-        self.conv2 = Conv2dGGM(cout, cout, 3, N_factor=N_factor, padding=1)
+        self.conv2 = Conv2dGGM(cout, cout, 3, padding=1, **conv_kw)
         self.bn2 = nn.BatchNorm2d(cout)
         self.act2 = nn.PReLU(num_parameters=cout)
         self.downsample = nn.Identity()
         if stride != 1 or cin != cout:
-            self.downsample = nn.Sequential(Conv2dGGM(cin, cout, 1, N_factor=N_factor, stride=stride),
+            self.downsample = nn.Sequential(Conv2dGGM(cin, cout, 1, stride=stride, **conv_kw),
                                             nn.BatchNorm2d(cout))
+        self.gain = nn.Parameter(torch.ones(cout)) if resnet20_style else None
 
     def forward(self, x):
+        shortcut = self.downsample(x)
+        if self.gain is not None:
+            shortcut = shortcut * self.gain.reshape(1, -1, 1, 1)
         out = self.act1(self.bn1(self.conv1(x)))
-        return self.act2(self.bn2(self.conv2(out)) + self.downsample(x))
+        return self.act2(self.bn2(self.conv2(out)) + shortcut)
 
 
 class CifarResNet(nn.Module):
-    """ResNet-18 for 32x32 inputs (3x3 stem, no max-pool), PReLU, GGM downsample convolutions."""
+    """ResNet-18/20 for 32x32 inputs (3x3 stem, no max-pool), PReLU, GGM downsample convolutions."""
 
     def __init__(self, arch: str = "resnet18", N_factor: float = 1.0, num_classes: int = 10):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, CIFAR_CHANNELS[0], 3, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(CIFAR_CHANNELS[0])
-        self.act1 = nn.PReLU(num_parameters=CIFAR_CHANNELS[0])
-        cin = CIFAR_CHANNELS[0]
-        for i, (blocks, cout) in enumerate(zip(CIFAR_STAGES[arch], CIFAR_CHANNELS), start=1):
+        cfg = CIFAR_RESNETS[arch]
+        channels, style = cfg["channels"], cfg["resnet20_style"]
+        self.conv1 = nn.Conv2d(3, channels[0], 3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(channels[0])
+        self.act1 = nn.PReLU(num_parameters=channels[0])
+        cin = channels[0]
+        self.stages = []
+        for i, (blocks, cout) in enumerate(zip(cfg["stages"], channels), start=1):
             layer = []
             for b in range(blocks):
-                layer.append(CifarBasicBlock(cin, cout, 2 if (b == 0 and i > 1) else 1, N_factor))
+                layer.append(CifarBasicBlock(cin, cout, 2 if (b == 0 and i > 1) else 1, N_factor, style))
                 cin = cout
             setattr(self, f"layer{i}", nn.Sequential(*layer))
-        self.fc = nn.Linear(CIFAR_CHANNELS[-1], num_classes)
+            self.stages.append(f"layer{i}")
+        self.fc = nn.Linear(channels[-1], num_classes, bias=not style)
 
     def forward(self, x):
         x = self.act1(self.bn1(self.conv1(x)))
-        x = self.layer4(self.layer3(self.layer2(self.layer1(x))))
+        for name in self.stages:
+            x = getattr(self, name)(x)
         return self.fc(torch.flatten(x.mean(dim=(2, 3)), 1))
 
 

@@ -12,6 +12,7 @@ MODELS = {
     },
     "cifar10": {
         "resnet18_ggm_1bit_N1": dict(arch="resnet18", bits="1/1", N=1),
+        "resnet20_ggm_1bit_N1": dict(arch="resnet20", bits="1/1", N=1),
         "vgg16_ggm_1bit_N1":    dict(arch="vgg16",    bits="1/1", N=1),
     },
     "adftd": {

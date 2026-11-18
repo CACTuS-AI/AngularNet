@@ -7,7 +7,7 @@ from .bert import BertGGM
 from .layers import Conv1dGGM, LinearGGM, PackedLinearGGM, ScaledConv2dGGM
 from .medformer import MedformerGGM
 from .models import MODELS
-from .projections import G_THREADS, cpu_threads, make_G, make_G_conv1d, make_G_conv2d
+from .projections import G_THREADS, cpu_threads, make_G, make_G_conv1d, make_G_conv2d, make_G_float32
 from .resnet import TinyImageNetResNet, build_cifar_resnet, build_imagenet_resnet
 from .vgg import build_vgg
 
@@ -21,7 +21,7 @@ def _seed_checkpoint(path: str) -> dict:
     return ckpt
 
 
-def _load_seed_model(model, ckpt: dict, layer_types):
+def _load_seed_model(model, ckpt: dict, layer_types, make_linear=make_G):
     """Regenerate every G from the seeds in the meta data, then load the weights strictly."""
     layers = {n: m for n, m in model.named_modules() if isinstance(m, layer_types)}
     seeds = ckpt["meta"]["g_seeds"]
@@ -39,7 +39,7 @@ def _load_seed_model(model, ckpt: dict, layer_types):
                 make = lambda: make_G_conv1d(seeds[name], m.groups, m.N, m.cin_g, m.kernel_size)
             else:  # LinearGGM, PackedLinearGGM
                 key = ("linear", seeds[name], m.N, m.in_features)
-                make = lambda: make_G(seeds[name], m.N, m.in_features)
+                make = lambda: make_linear(seeds[name], m.N, m.in_features)
             if key not in cache:
                 cache[key] = make()
             state[name + ".G"] = cache[key].clone()
@@ -69,7 +69,8 @@ def load_model(dataset: str, path: str, name: str):
         return _load_seed_model(MedformerGGM(**ckpt["meta"]["model"]), ckpt, (LinearGGM, Conv1dGGM))
     if dataset in ("sst2", "qnli"):  # also returns the tokenizer settings stored with the model
         ckpt = _seed_checkpoint(path)
-        model = _load_seed_model(BertGGM(**ckpt["meta"]["model"]), ckpt, PackedLinearGGM)
+        # the BERT weight bits were packed with the float32 G construction, so BERT keeps it
+        model = _load_seed_model(BertGGM(**ckpt["meta"]["model"]), ckpt, PackedLinearGGM, make_G_float32)
         model.vocab, model.max_seq_length = ckpt["meta"]["vocab"], ckpt["meta"]["max_seq_length"]
         return model
     m = MODELS[dataset][name]
